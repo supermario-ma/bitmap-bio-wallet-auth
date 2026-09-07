@@ -22,7 +22,6 @@ from moderation_policy import moderate as moderate_display_text
 
 MAX_MESSAGE_CHARS = 140
 PAGE_SIZE = 48
-MAX_PAGE_SIZE = 72
 COOKIE_NAME = "bitmapads_gbvid"
 COOKIE_RE = re.compile(r"^[A-Za-z0-9_-]{20,80}\.[0-9a-f]{64}$")
 _SCHEMA_LOCK = threading.Lock()
@@ -429,15 +428,20 @@ def guestbook_get(db_path, secret_dir, bitmap_number, cookie_header="", remote_i
             "SELECT author_kind, visitor_label, text, created_at FROM lord_bio_guestbook WHERE lord_address=? AND status='visible' ORDER BY created_at DESC, id DESC LIMIT 60",
             (bio["lord"],),
         ).fetchall()
-        messages = [
-            {
+        messages = []
+        for row in rows:
+            # Re-read stored notes through the current policy, as the map
+            # preview and the global feed already do. Otherwise a policy update
+            # never reaches the largest surface.
+            text, _error = _message(row["text"])
+            if not text:
+                continue
+            messages.append({
                 "author_kind": row["author_kind"] if row["author_kind"] == "lord" else "visitor",
                 "visitor_label": "Lord" if row["author_kind"] == "lord" else row["visitor_label"],
-                "text": row["text"],
+                "text": text,
                 "created_at": int(row["created_at"]),
-            }
-            for row in rows
-        ]
+            })
         now = _now()
         return 200, {
             "ok": True,
