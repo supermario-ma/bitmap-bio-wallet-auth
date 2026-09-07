@@ -24,26 +24,51 @@ def tagged(tag, data):
     h = sha(tag.encode("ascii"))
     return sha(h + h + data)
 
-def _add(a, b):
-    if a is None: return b
-    if b is None: return a
-    x, y = a
-    u, v = b
-    if x == u:
-        if y != v or y == 0: return None
-        slope = 3 * x * x * pow(2 * y, P - 2, P) % P
-    else:
-        slope = (v - y) * pow((u - x) % P, P - 2, P) % P
-    nx = (slope * slope - x - u) % P
-    return nx, (slope * (x - nx) - y) % P
+def _jdouble(p):
+    x, y, z = p
+    if not y or not z: return 0, 0, 0
+    ysq = y * y % P
+    s = 4 * x * ysq % P
+    m = 3 * x * x % P
+    nx = (m * m - 2 * s) % P
+    return nx, (m * (s - nx) - 8 * ysq * ysq) % P, 2 * y * z % P
+
+def _jadd(a, b):
+    x1, y1, z1 = a
+    x2, y2, z2 = b
+    if not z1: return b
+    if not z2: return a
+    z1s, z2s = z1 * z1 % P, z2 * z2 % P
+    u1, u2 = x1 * z2s % P, x2 * z1s % P
+    s1, s2 = y1 * z2 * z2s % P, y2 * z1 * z1s % P
+    if u1 == u2:
+        return _jdouble(a) if s1 == s2 else (0, 0, 0)
+    h, r = (u2 - u1) % P, (s2 - s1) % P
+    h2 = h * h % P
+    h3 = h * h2 % P
+    u1h2 = u1 * h2 % P
+    nx = (r * r - h3 - 2 * u1h2) % P
+    return nx, (r * (u1h2 - nx) - s1 * h3) % P, h * z1 * z2 % P
 
 def _mul(point, scalar):
-    result = None
+    """Jacobian double-and-add: one field inversion per verification instead of
+    one per point addition. Verification only, so the loop need not be secret
+    independent; there is no private key here to leak through its timing."""
+    result = (0, 0, 0)
+    current = (point[0], point[1], 1)
     while scalar:
-        if scalar & 1: result = _add(result, point)
-        point = _add(point, point)
+        if scalar & 1: result = _jadd(result, current)
+        current = _jdouble(current)
         scalar >>= 1
     return result
+
+def _affine(p):
+    x, y, z = p
+    if not z: return None
+    inv = pow(z, P - 2, P)
+    inv2 = inv * inv % P
+    return x * inv2 % P, y * inv2 * inv % P
+
 
 def _lift(x):
     if x >= P: raise ValueError("x")
@@ -116,7 +141,7 @@ def _ecdsa(sig, pub, digest):
     r, s = int.from_bytes(rb,"big"), int.from_bytes(sb,"big")
     if not 0 < r < N or not 0 < s <= N//2: return False
     inv = pow(s,N-2,N)
-    result = _add(_mul(G,int.from_bytes(digest,"big")*inv%N),_mul(point,r*inv%N))
+    result = _affine(_jadd(_mul(G,int.from_bytes(digest,"big")*inv%N),_mul(point,r*inv%N)))
     return result is not None and result[0]%N == r
 
 def _schnorr(sig, pub, digest):
@@ -124,7 +149,7 @@ def _schnorr(sig, pub, digest):
     if r >= P or s >= N: return False
     point = _lift(int.from_bytes(pub,"big"))
     e = int.from_bytes(tagged("BIP0340/challenge",sig[:32]+pub+digest),"big")%N
-    result = _add(_mul(G,s),_mul(point,N-e))
+    result = _affine(_jadd(_mul(G,s),_mul(point,N-e)))
     return result is not None and not result[1]&1 and result[0] == r
 
 def verify(address, message, signature):
