@@ -31,6 +31,32 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(status,200)
         return c,s
 
+    def _counting_resolver(self):
+        seen=[]
+        def resolver(number):
+            seen.append(number)
+            return {"asset_url":"/storage/ads/offline/cached.webp","inscription_number":int(number)}
+        return seen,resolver
+
+    def test_image_lookups_are_capped_per_lord(self):
+        """One Lord must not be able to drain the site-wide Ordiscan budget."""
+        seen,resolver=self._counting_resolver()
+        _,s=self.login()
+        for number in range(1,auth.ASSET_LOOKUPS_PER_DAY+1):
+            self.assertEqual(self.call("avatar",{"avatar_number":str(number)},s["token"],resolver=resolver)[0],200)
+        status,body=self.call("avatar",{"avatar_number":"9999"},s["token"],resolver=resolver)
+        self.assertEqual(status,429)
+        self.assertIn("image lookup limit",body["error"])
+        # The refused attempt must not reach the upstream API at all.
+        self.assertEqual(len(seen),auth.ASSET_LOOKUPS_PER_DAY)
+
+    def test_save_cooldown_is_checked_before_the_image_lookup(self):
+        seen,resolver=self._counting_resolver()
+        _,s=self.login()
+        self.assertEqual(self.call("save",{"name":"first","avatar_number":"2","social":{}},s["token"],resolver=resolver)[0],200)
+        self.assertEqual(self.call("save",{"name":"second","avatar_number":"3","social":{}},s["token"],resolver=resolver)[0],429)
+        self.assertEqual(seen,["2"])  # the rate-limited save spent no lookup
+
     def test_signature_replay_origin_expiry_and_wrong_owner(self):
         self.assertEqual(self.call("challenge",{"address":"wrong"})[0],403)
         self.assertEqual(self.call("challenge",{"address":ADDRESS},origin="https://evil.example")[0],400)

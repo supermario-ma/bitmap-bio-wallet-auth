@@ -15,6 +15,10 @@ import lord_bio
 from inscription_assets import AssetError, private_directory
 from moderation_policy import moderate
 
+# Ordiscan's budget is small and shared by the whole site, so no single Lord
+# may spend more than a slice of it in a day.
+ASSET_LOOKUPS_PER_DAY = 25
+
 ALLOWED_ORIGINS = {"https://bitmap.bio", "https://bitmapads.com", "https://www.bitmap.bio", "https://www.bitmapads.com"}
 
 def _origin(value):
@@ -121,15 +125,29 @@ def handle(root, db_path, storage_dir, number, action, payload, origin, authoriz
             con.commit()
             return 200, {"ok":True,"token":token,"lord":owner,"expires_at":now+1800}
         if action in ("save","avatar"):
-            _session(con,number,authorization,origin)
+            owner = _session(con,number,authorization,origin)
             avatar_number = payload.get("avatar_number", "")
             if not isinstance(avatar_number,(str,int)) or isinstance(avatar_number,bool): raise ValueError("Enter a valid inscription number.")
             avatar_number = str(avatar_number).strip()
             if avatar_number and not re.fullmatch(r"-?[0-9]{1,12}",avatar_number): raise ValueError("Enter a valid inscription number, not an ID or URL.")
             if action=="avatar" and not avatar_number: raise ValueError("Enter an image inscription number.")
+            if action == "save":
+                # Check the write cooldown before spending an upstream lookup.
+                previous = con.execute("SELECT updated_at FROM lord_bio_profiles WHERE lord_address=?",(owner,)).fetchone()
+                if previous and now-int(previous[0])<5:
+                    return 429, {"ok":False,"error":"Please wait a few seconds before saving again."}
             asset = None
             if avatar_number:
                 if resolver is None: raise ValueError("Image lookup is temporarily unavailable.")
+                con.execute("BEGIN IMMEDIATE")
+                con.execute("DELETE FROM lord_bio_asset_lookups WHERE created_at<?", (now-86400,))
+                spent = con.execute("SELECT COUNT(*) FROM lord_bio_asset_lookups WHERE lord_address=? AND created_at>?",
+                                    (owner,now-86400)).fetchone()[0]
+                if spent >= ASSET_LOOKUPS_PER_DAY:
+                    con.commit()
+                    return 429, {"ok":False,"error":"You have reached today's image lookup limit. Please try again tomorrow."}
+                con.execute("INSERT INTO lord_bio_asset_lookups VALUES(?,?)", (owner,now))
+                con.commit()  # charge the attempt before leaving the database
                 asset = resolver(avatar_number)
                 if not isinstance(asset,dict) or not re.fullmatch(r"/storage/ads/offline/[A-Za-z0-9_.-]+",asset.get("asset_url","")):
                     raise ValueError("A local static image is required.")

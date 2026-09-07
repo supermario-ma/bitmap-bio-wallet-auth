@@ -205,6 +205,11 @@ def _schema(con):
               created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_bio_challenge_rate ON lord_bio_challenges(ip_hash,created_at);
+            CREATE TABLE IF NOT EXISTS lord_bio_asset_lookups (
+              lord_address TEXT NOT NULL, created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_bio_asset_lookup
+              ON lord_bio_asset_lookups(lord_address, created_at);
             CREATE TABLE IF NOT EXISTS lord_bio_sessions (
               token_hash TEXT PRIMARY KEY,lord_address TEXT NOT NULL,origin TEXT NOT NULL,expires_at INTEGER NOT NULL
             );
