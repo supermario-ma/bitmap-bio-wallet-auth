@@ -4,6 +4,7 @@ No session in localStorage, no private keys, no transaction API. All ownership
 decisions use the existing registry (not live chain claims). Python 3.6+.
 """
 import hashlib
+import os
 import re
 import secrets
 import sqlite3
@@ -19,9 +20,10 @@ ALLOWED_ORIGINS = {"https://bitmap.bio", "https://bitmapads.com", "https://www.b
 
 def _origin(value):
     if value in ALLOWED_ORIGINS: return value
-    # Development server only; never enable loopback origins on the Linux host.
-    import os
-    if os.name == "nt" and re.fullmatch(r"http://(127\.0\.0\.1|localhost):[0-9]{2,5}", value or ""): return value
+    # Loopback is a local-development convenience, so it takes an operator
+    # decision rather than a guess from the host platform. Production leaves
+    # BITMAPADS_DEV_ORIGINS unset, on every operating system.
+    if os.environ.get("BITMAPADS_DEV_ORIGINS") == "1" and re.fullmatch(r"http://(127\.0\.0\.1|localhost):[0-9]{2,5}", value or ""): return value
     raise ValueError("Open this page directly on bitmap.bio or bitmapads.com.")
 
 def _hash(value):

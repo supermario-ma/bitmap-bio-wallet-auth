@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import time
 import unittest
@@ -8,6 +9,7 @@ import lord_bio_auth as auth
 
 ADDRESS="bc1pss0zhytly75awhm6x2hhvd5lnzv3vssgrf9axfheq8ldyzn88ges79fler"
 ORIGIN="https://bitmap.bio"
+ALLOWED=sorted(auth.ALLOWED_ORIGINS)
 
 class AuthTests(unittest.TestCase):
     def setUp(self):
@@ -30,6 +32,23 @@ class AuthTests(unittest.TestCase):
             verify.assert_called_once_with(ADDRESS,c["message"],"unit-test-proof")
         self.assertEqual(status,200)
         return c,s
+
+    def test_loopback_origins_require_an_explicit_opt_in(self):
+        """The bypass used to key on os.name, so a Windows host silently
+        accepted any loopback origin. It must key on an operator decision."""
+        environment = dict(os.environ)
+        environment.pop("BITMAPADS_DEV_ORIGINS", None)
+        with patch.dict(os.environ, environment, clear=True):
+            with self.assertRaises(ValueError): auth._origin("http://localhost:8000")
+            with self.assertRaises(ValueError): auth._origin("http://127.0.0.1:5173")
+            self.assertEqual(self.call("challenge",{"address":ADDRESS},origin="http://localhost:8000")[0],400)
+        with patch.dict(os.environ, {"BITMAPADS_DEV_ORIGINS":"1"}):
+            self.assertEqual(auth._origin("http://localhost:8000"),"http://localhost:8000")
+            self.assertEqual(auth._origin("http://127.0.0.1:5173"),"http://127.0.0.1:5173")
+            for value in (None,"","http://evil.example:8000","https://localhost:8000","http://localhost.evil.test:80"):
+                with self.assertRaises(ValueError): auth._origin(value)
+        for value in ALLOWED:  # the real origins never depend on the flag
+            self.assertEqual(auth._origin(value),value)
 
     def test_signature_replay_origin_expiry_and_wrong_owner(self):
         self.assertEqual(self.call("challenge",{"address":"wrong"})[0],403)
