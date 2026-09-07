@@ -46,6 +46,28 @@ class LordBioBackendTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_secret_creation_never_overwrites_an_existing_file(self):
+        """The in-process lock already serialises this; the invariant that
+        matters is at the file level, between separate worker processes."""
+        directory = self.root / "secrets"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "race-v1.secret"
+        winner = b"W" * 32
+        path.write_bytes(winner)
+        # A worker that already decided to create must adopt the winner's value.
+        self.assertEqual(lord_bio._create_secret(path), winner)
+        self.assertEqual(path.read_bytes(), winner)
+
+    def test_secret_is_stable_across_cache_misses(self):
+        directory = self.root / "secrets2"
+        lord_bio._SECRET_CACHE.clear()
+        first = lord_bio._secret(directory, "once-v1.secret")
+        lord_bio._SECRET_CACHE.clear()
+        second = lord_bio._secret(directory, "once-v1.secret")
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 32)
+        self.assertFalse(list(directory.glob("*.tmp")))
+
     def test_cached_holdings_are_numeric_and_guestbook_never_exposes_raw_ip(self):
         status, payload = lord_bio.get_bio(self.db, 1688, sort="bitmap")
         self.assertEqual(status, 200)

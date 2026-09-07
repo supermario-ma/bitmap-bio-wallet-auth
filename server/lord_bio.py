@@ -43,6 +43,32 @@ def _safe_number(value):
     return number if 0 <= number <= 999_999 else None
 
 
+def _create_secret(path):
+    """Create the secret only if it is still missing, then adopt whatever is on
+    disk. Two workers starting together must not each keep their own value:
+    that splits the rate-limit buckets keyed on it and makes a cookie signed by
+    one worker fail validation on another."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        handle = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError:  # another worker created it first
+        handle = None
+    if handle is not None:
+        try:
+            os.write(handle, secrets.token_bytes(32))
+        finally:
+            os.close(handle)
+    for _ in range(100):  # the winner may still be writing its 32 bytes
+        try:
+            value = path.read_bytes()
+        except OSError:
+            value = b""
+        if len(value) >= 32:
+            return value
+        time.sleep(0.01)
+    raise OSError("could not read " + str(path))
+
+
 def _secret(secret_dir, filename="lord-bio-v1.secret"):
     """Return an on-server secret stored outside the web-served asset tree."""
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}\.secret", filename):
@@ -58,21 +84,7 @@ def _secret(secret_dir, filename="lord-bio-v1.secret"):
             if len(value) < 32:
                 raise OSError("short secret")
         except OSError:
-            value = secrets.token_bytes(32)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = path.with_name(path.name + "." + secrets.token_hex(8) + ".tmp")
-            try:
-                temporary.write_bytes(value)
-                try:
-                    os.chmod(temporary, 0o600)
-                except OSError:
-                    pass
-                os.replace(temporary, path)
-            finally:
-                try:
-                    temporary.unlink()
-                except OSError:
-                    pass
+            value = _create_secret(path)
         _SECRET_CACHE[key] = value
         return value
 
