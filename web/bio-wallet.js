@@ -54,7 +54,7 @@ function init(){
 }
 export function openEditor(options){
   if(!dialog)init();if(busy){if(!dialog.open)dialog.showModal();return}current=options;
-  const valid=session&&session.lord===options.lord&&session.expires_at>Date.now()/1000;
+  const valid=session&&session.lord===options.lord&&Number(session.bitmap)===Number(options.bitmap)&&session.expires_at>Date.now()/1000;
   if(!valid)session=null;else current.onAuthenticated(session.token);
   $('bio-editor-owner').textContent=options.lord;$('bio-editor-connect').hidden=Boolean(valid);$('bio-editor-form').hidden=!valid;fill(options.profile||{});status();if(!dialog.open)dialog.showModal();
 }

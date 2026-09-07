@@ -31,6 +31,25 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(status,200)
         return c,s
 
+    def test_session_only_authorises_the_bitmap_that_was_signed_for(self):
+        """The message reads 'Bitmap: n.bitmap', so the session must mean only
+        that Bitmap - even for another Bitmap the same address owns."""
+        _,s=self.login()
+        self.assertEqual(s["bitmap"],1688)
+        self.assertEqual(self.call("save",{"name":"ok","social":{}},s["token"])[0],200)
+        other=auth.handle(self.root,self.db,self.root,9001,"save",{"name":"nope","social":{}},
+                          ORIGIN,"Bearer "+s["token"],"203.0.113.5",None)
+        self.assertEqual(other[0],403)
+        self.assertIsNone(auth.verified_owner(self.db,9001,"Bearer "+s["token"],ORIGIN))
+        self.assertEqual(auth.verified_owner(self.db,1688,"Bearer "+s["token"],ORIGIN),ADDRESS)
+
+    def test_sessions_predating_the_bitmap_binding_stop_authorising(self):
+        _,s=self.login()
+        con=sqlite3.connect(self.db)
+        con.execute("UPDATE lord_bio_sessions SET bitmap_number=-1")  # pre-upgrade row
+        con.commit();con.close()
+        self.assertEqual(self.call("save",{"name":"nope","social":{}},s["token"])[0],403)
+
     def test_signature_replay_origin_expiry_and_wrong_owner(self):
         self.assertEqual(self.call("challenge",{"address":"wrong"})[0],403)
         self.assertEqual(self.call("challenge",{"address":ADDRESS},origin="https://evil.example")[0],400)

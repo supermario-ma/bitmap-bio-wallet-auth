@@ -206,10 +206,16 @@ def _schema(con):
             );
             CREATE INDEX IF NOT EXISTS idx_bio_challenge_rate ON lord_bio_challenges(ip_hash,created_at);
             CREATE TABLE IF NOT EXISTS lord_bio_sessions (
-              token_hash TEXT PRIMARY KEY,lord_address TEXT NOT NULL,origin TEXT NOT NULL,expires_at INTEGER NOT NULL
+              token_hash TEXT PRIMARY KEY,lord_address TEXT NOT NULL,origin TEXT NOT NULL,expires_at INTEGER NOT NULL,
+              bitmap_number INTEGER NOT NULL DEFAULT -1
             );
             """
         )
+        session_columns = {row[1] for row in con.execute("PRAGMA table_info(lord_bio_sessions)")}
+        if "bitmap_number" not in session_columns:
+            # -1 matches no Bitmap, so sessions predating the upgrade stop
+            # authorising writes. They are thirty-minute tokens; users reconnect.
+            con.execute("ALTER TABLE lord_bio_sessions ADD COLUMN bitmap_number INTEGER NOT NULL DEFAULT -1")
         columns = {row[1] for row in con.execute("PRAGMA table_info(lord_bio_profiles)")}
         if "avatar_number" not in columns:
             con.execute("ALTER TABLE lord_bio_profiles ADD COLUMN avatar_number INTEGER")

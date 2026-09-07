@@ -42,8 +42,8 @@ def _owner(con, number):
 def _session(con, number, authorization, origin):
     if not isinstance(authorization,str) or not re.fullmatch(r"Bearer [A-Za-z0-9_-]{40,64}",authorization):
         raise PermissionError("Connect your wallet and verify ownership before editing.")
-    row = con.execute("SELECT lord_address FROM lord_bio_sessions WHERE token_hash=? AND origin=? AND expires_at>?",
-                      (_hash(authorization[7:]), _origin(origin), int(time.time()))).fetchone()
+    row = con.execute("SELECT lord_address FROM lord_bio_sessions WHERE token_hash=? AND origin=? AND bitmap_number=? AND expires_at>?",
+                      (_hash(authorization[7:]), _origin(origin), number, int(time.time()))).fetchone()
     owner = _owner(con, number)
     if not row or row[0] != owner: raise PermissionError("Your editing session expired or the Bitmap changed owner. Please reconnect.")
     return owner
@@ -117,9 +117,10 @@ def handle(root, db_path, storage_dir, number, action, payload, origin, authoriz
             con.execute("BEGIN IMMEDIATE")
             if _owner(con,number) != owner: raise PermissionError("The Bitmap changed owner. Please reload.")
             token = secrets.token_urlsafe(32)
-            con.execute("INSERT INTO lord_bio_sessions VALUES(?,?,?,?)",(_hash(token),owner,origin,now+1800))
+            con.execute("INSERT INTO lord_bio_sessions(token_hash,lord_address,origin,expires_at,bitmap_number) VALUES(?,?,?,?,?)",
+                        (_hash(token),owner,origin,now+1800,number))
             con.commit()
-            return 200, {"ok":True,"token":token,"lord":owner,"expires_at":now+1800}
+            return 200, {"ok":True,"token":token,"lord":owner,"bitmap":number,"expires_at":now+1800}
         if action in ("save","avatar"):
             _session(con,number,authorization,origin)
             avatar_number = payload.get("avatar_number", "")
