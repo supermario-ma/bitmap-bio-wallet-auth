@@ -82,7 +82,6 @@ def address_program(address):
 
 def _witness(signature):
     if not isinstance(signature, str) or len(signature) > 300: raise ValueError("signature")
-    if signature.startswith("smp"): signature = signature[3:]
     raw = base64.b64decode(signature, validate=True)
     if not raw or raw[0] not in (1, 2): raise ValueError("witness")
     offset, out = 1, []
