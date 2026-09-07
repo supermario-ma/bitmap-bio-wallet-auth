@@ -83,6 +83,14 @@ def handle(root, db_path, storage_dir, number, action, payload, origin, authoriz
         if number is None or not isinstance(payload,dict): raise ValueError("Invalid profile request.")
         con = _db(db_path)
         now = int(time.time())
+        if action == "logout":
+            # Reported as success either way, so a token cannot be probed here,
+            # and reachable even once the Bitmap has changed owner.
+            if isinstance(authorization,str) and re.fullmatch(r"Bearer [A-Za-z0-9_-]{40,64}",authorization):
+                con.execute("BEGIN IMMEDIATE")
+                con.execute("DELETE FROM lord_bio_sessions WHERE token_hash=?",(_hash(authorization[7:]),))
+                con.commit()
+            return 200, {"ok":True}
         owner = _owner(con, number)
         if action == "challenge":
             if payload.get("address") != owner: raise PermissionError("The connected address does not own this Bitmap in our cached registry.")

@@ -31,6 +31,33 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(status,200)
         return c,s
 
+    def test_logout_revokes_the_session_immediately(self):
+        _,s=self.login()
+        self.assertEqual(self.call("save",{"name":"ok","social":{}},s["token"])[0],200)
+        self.assertEqual(self.call("logout",{},s["token"])[0],200)
+        self.assertEqual(self.call("save",{"name":"no","social":{}},s["token"])[0],403)
+        con=sqlite3.connect(self.db)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM lord_bio_sessions").fetchone()[0],0)
+        con.close()
+
+    def test_logout_reports_success_without_a_usable_token(self):
+        """A caller must not be able to tell a live token from a dead one."""
+        self.assertEqual(self.call("logout",{})[0],200)
+        self.assertEqual(self.call("logout",{},"not-a-real-token")[0],200)
+        _,s=self.login()
+        self.assertEqual(self.call("logout",{},s["token"])[0],200)
+        self.assertEqual(self.call("logout",{},s["token"])[0],200)
+
+    def test_logout_still_works_after_the_bitmap_changed_owner(self):
+        _,s=self.login()
+        con=sqlite3.connect(self.db)
+        con.execute("UPDATE bitmap_registry SET owner_address='changed' WHERE bitmap_number=1688")
+        con.commit();con.close()
+        self.assertEqual(self.call("logout",{},s["token"])[0],200)
+        con=sqlite3.connect(self.db)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM lord_bio_sessions").fetchone()[0],0)
+        con.close()
+
     def test_signature_replay_origin_expiry_and_wrong_owner(self):
         self.assertEqual(self.call("challenge",{"address":"wrong"})[0],403)
         self.assertEqual(self.call("challenge",{"address":ADDRESS},origin="https://evil.example")[0],400)
