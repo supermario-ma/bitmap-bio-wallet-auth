@@ -7,6 +7,12 @@ import lord_bio
 import lord_bio_auth as auth
 
 ADDRESS="bc1pss0zhytly75awhm6x2hhvd5lnzv3vssgrf9axfheq8ldyzn88ges79fler"
+# Public BIP322 vector (tests/fixtures/bip322/generated.json), wire format:
+# wallets send plain base64, so the fixture type tag is stripped here.
+P2WPKH_ADDRESS="bc1qqthe0hz8klx90e7stf6shclhsvqd5ly96pn53v"
+P2WPKH_MESSAGE="2V6TUTMSH4VQ3Z7WZWKYD7DFNH"
+P2WPKH_SIGNATURE=("AkgwRQIhALC6hdfxNy1n45d7UXSskRBdfZW0Al259E1kDMpipdYkAiAJPfZqb+WurZuf1apU5xeE"
+                  "6Igui9dvt5tihQLDvxlY1AEhAqbnruyo677ktQjio7XOchO3w51Dh9AbRVngha5jtNfT")
 ORIGIN="https://bitmap.bio"
 
 class AuthTests(unittest.TestCase):
@@ -30,6 +36,36 @@ class AuthTests(unittest.TestCase):
             verify.assert_called_once_with(ADDRESS,c["message"],"unit-test-proof")
         self.assertEqual(status,200)
         return c,s
+
+    def test_native_segwit_login_runs_through_the_real_verifier(self):
+        """Every other authenticated test stubs bio_signature.verify. This one
+        must not: it is the only cover for the bc1q path through handle(), and
+        it fails on any host where hashlib cannot compute RIPEMD160."""
+        con = sqlite3.connect(self.db)
+        con.execute("UPDATE bitmap_registry SET owner_address=?", (P2WPKH_ADDRESS,))
+        con.commit(); con.close()
+        status, challenge = self.call("challenge", {"address": P2WPKH_ADDRESS})
+        self.assertEqual(status, 200)
+        # Swap in a message the fixture key really signed; everything else -
+        # single use, expiry, owner re-check, session issue - stays live.
+        con = sqlite3.connect(self.db)
+        con.execute("UPDATE lord_bio_challenges SET message=? WHERE nonce=?", (P2WPKH_MESSAGE, challenge["nonce"]))
+        con.commit(); con.close()
+        status, session = self.call("verify", {"nonce": challenge["nonce"], "signature": P2WPKH_SIGNATURE})
+        self.assertEqual(status, 200, session.get("error"))
+        self.assertEqual(session["lord"], P2WPKH_ADDRESS)
+        self.assertEqual(self.call("save", {"name": "Native SegWit lord"}, session["token"])[0], 200)
+
+    def test_real_verifier_rejects_a_signature_from_another_address(self):
+        con = sqlite3.connect(self.db)
+        con.execute("UPDATE bitmap_registry SET owner_address=?", (ADDRESS,))
+        con.commit(); con.close()
+        status, challenge = self.call("challenge", {"address": ADDRESS})
+        self.assertEqual(status, 200)
+        con = sqlite3.connect(self.db)
+        con.execute("UPDATE lord_bio_challenges SET message=? WHERE nonce=?", (P2WPKH_MESSAGE, challenge["nonce"]))
+        con.commit(); con.close()
+        self.assertEqual(self.call("verify", {"nonce": challenge["nonce"], "signature": P2WPKH_SIGNATURE})[0], 403)
 
     def test_signature_replay_origin_expiry_and_wrong_owner(self):
         self.assertEqual(self.call("challenge",{"address":"wrong"})[0],403)
