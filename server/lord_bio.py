@@ -22,7 +22,6 @@ from moderation_policy import moderate as moderate_display_text
 
 MAX_MESSAGE_CHARS = 140
 PAGE_SIZE = 48
-MAX_PAGE_SIZE = 72
 COOKIE_NAME = "bitmapads_gbvid"
 COOKIE_RE = re.compile(r"^[A-Za-z0-9_-]{20,80}\.[0-9a-f]{64}$")
 _SCHEMA_LOCK = threading.Lock()
@@ -42,6 +41,25 @@ def _safe_number(value):
         return None
     return number if 0 <= number <= 999_999 else None
 
+def _create_secret(path):
+    """Atomically create a process-shared secret, or adopt the winning value."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        handle = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError:
+        handle = None
+    if handle is not None:
+        try:
+            os.write(handle, secrets.token_bytes(32))
+        finally:
+            os.close(handle)
+    for _ in range(100):
+        try: value = path.read_bytes()
+        except OSError: value = b""
+        if len(value) >= 32: return value
+        time.sleep(0.01)
+    raise OSError("could not read " + str(path))
+
 
 def _secret(secret_dir, filename="lord-bio-v1.secret"):
     """Return an on-server secret stored outside the web-served asset tree."""
@@ -58,21 +76,7 @@ def _secret(secret_dir, filename="lord-bio-v1.secret"):
             if len(value) < 32:
                 raise OSError("short secret")
         except OSError:
-            value = secrets.token_bytes(32)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = path.with_name(path.name + "." + secrets.token_hex(8) + ".tmp")
-            try:
-                temporary.write_bytes(value)
-                try:
-                    os.chmod(temporary, 0o600)
-                except OSError:
-                    pass
-                os.replace(temporary, path)
-            finally:
-                try:
-                    temporary.unlink()
-                except OSError:
-                    pass
+            value = _create_secret(path)
         _SECRET_CACHE[key] = value
         return value
 
@@ -205,11 +209,20 @@ def _schema(con):
               created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_bio_challenge_rate ON lord_bio_challenges(ip_hash,created_at);
+            CREATE TABLE IF NOT EXISTS lord_bio_asset_lookups (
+              lord_address TEXT NOT NULL, created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_bio_asset_lookup
+              ON lord_bio_asset_lookups(lord_address, created_at);
             CREATE TABLE IF NOT EXISTS lord_bio_sessions (
-              token_hash TEXT PRIMARY KEY,lord_address TEXT NOT NULL,origin TEXT NOT NULL,expires_at INTEGER NOT NULL
+              token_hash TEXT PRIMARY KEY,lord_address TEXT NOT NULL,origin TEXT NOT NULL,expires_at INTEGER NOT NULL,
+              bitmap_number INTEGER NOT NULL DEFAULT -1
             );
             """
         )
+        session_columns = {row[1] for row in con.execute("PRAGMA table_info(lord_bio_sessions)")}
+        if "bitmap_number" not in session_columns:
+            con.execute("ALTER TABLE lord_bio_sessions ADD COLUMN bitmap_number INTEGER NOT NULL DEFAULT -1")
         columns = {row[1] for row in con.execute("PRAGMA table_info(lord_bio_profiles)")}
         if "avatar_number" not in columns:
             con.execute("ALTER TABLE lord_bio_profiles ADD COLUMN avatar_number INTEGER")
@@ -429,15 +442,17 @@ def guestbook_get(db_path, secret_dir, bitmap_number, cookie_header="", remote_i
             "SELECT author_kind, visitor_label, text, created_at FROM lord_bio_guestbook WHERE lord_address=? AND status='visible' ORDER BY created_at DESC, id DESC LIMIT 60",
             (bio["lord"],),
         ).fetchall()
-        messages = [
-            {
+        messages = []
+        for row in rows:
+            text, _error = _message(row["text"])
+            if not text:
+                continue
+            messages.append({
                 "author_kind": row["author_kind"] if row["author_kind"] == "lord" else "visitor",
                 "visitor_label": "Lord" if row["author_kind"] == "lord" else row["visitor_label"],
-                "text": row["text"],
+                "text": text,
                 "created_at": int(row["created_at"]),
-            }
-            for row in rows
-        ]
+            })
         now = _now()
         return 200, {
             "ok": True,
