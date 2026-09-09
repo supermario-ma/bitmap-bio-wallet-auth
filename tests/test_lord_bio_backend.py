@@ -49,6 +49,22 @@ class LordBioBackendTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_created_secret_is_written_as_raw_bytes(self):
+        """os.open defaults to text mode on Windows, so a 0x0a inside the key
+        would be stored as 0x0d 0x0a and the file would no longer hold the key
+        that was generated. Force that byte rather than wait for the ~12% of
+        random keys that happen to contain one."""
+        directory = self.root / "secrets3"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "binary-v1.secret"
+        payload = bytes([0x41, 0x0a, 0x42, 0x0a, 0x0d]) + bytes([0x43]) * 27
+        self.assertEqual(len(payload), 32)
+        with patch.object(lord_bio.secrets, "token_bytes", return_value=payload):
+            created = lord_bio._create_secret(path)
+        self.assertEqual(created, payload)
+        self.assertEqual(path.read_bytes(), payload)
+        self.assertEqual(len(path.read_bytes()), 32)
+
     def test_secret_creation_never_overwrites_an_existing_file(self):
         """The in-process lock already serialises this; the invariant that
         matters is at the file level, between separate worker processes."""

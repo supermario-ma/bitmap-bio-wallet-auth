@@ -45,7 +45,7 @@ def _create_secret(path):
     """Atomically create a process-shared secret, or adopt the winning value."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
-        handle = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        handle = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o600)
     except OSError:
         handle = None
     if handle is not None:
