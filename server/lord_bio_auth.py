@@ -159,6 +159,12 @@ def handle(root, db_path, storage_dir, number, action, payload, origin, authoriz
             links = [_social(k,social.get(k)) for k in ("x","telegram","discord","website","tiktok","instagram","youtube","gmgn")]
             con.execute("BEGIN IMMEDIATE")
             owner = _session(con,number,authorization,origin)  # check again after image lookup
+            # Keep the early check above to avoid an unnecessary image lookup,
+            # then repeat it under the write lock so concurrent requests cannot
+            # both pass the cooldown and write a profile.
+            previous = con.execute("SELECT updated_at FROM lord_bio_profiles WHERE lord_address=?",(owner,)).fetchone()
+            if previous and now-int(previous[0])<5:
+                return 429, {"ok":False,"error":"Please wait a few seconds before saving again."}
             con.execute("INSERT OR REPLACE INTO lord_bio_profiles(lord_address,display_name,bio,x_url,telegram_url,discord_url,website_url,tiktok_url,instagram_url,youtube_url,gmgn_url,updated_at,avatar_number,avatar_url) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (owner,name,bio)+tuple(links)+(int(time.time()),int(avatar_number) if avatar_number else None,asset["asset_url"] if asset else None))
             con.commit()
