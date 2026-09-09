@@ -4,7 +4,10 @@ import time
 import unittest
 from pathlib import Path
 
+from unittest.mock import patch
+
 import lord_bio
+import moderation_policy
 
 
 class LordBioBackendTests(unittest.TestCase):
@@ -45,6 +48,50 @@ class LordBioBackendTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_secret_creation_never_overwrites_an_existing_file(self):
+        """The in-process lock already serialises this; the invariant that
+        matters is at the file level, between separate worker processes."""
+        directory = self.root / "secrets"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "race-v1.secret"
+        winner = b"W" * 32
+        path.write_bytes(winner)
+        # A worker that already decided to create must adopt the winner's value.
+        self.assertEqual(lord_bio._create_secret(path), winner)
+        self.assertEqual(path.read_bytes(), winner)
+
+    def test_secret_is_stable_across_cache_misses(self):
+        directory = self.root / "secrets2"
+        lord_bio._SECRET_CACHE.clear()
+        first = lord_bio._secret(directory, "once-v1.secret")
+        lord_bio._SECRET_CACHE.clear()
+        second = lord_bio._secret(directory, "once-v1.secret")
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 32)
+        self.assertFalse(list(directory.glob("*.tmp")))
+
+    def test_every_guestbook_read_path_applies_the_current_policy(self):
+        """A note stored under an older policy must be filtered on the main
+        list too, not only on the map preview and the global feed."""
+        con = sqlite3.connect(self.db)
+        lord_bio._schema(con)
+        con.execute(
+            "INSERT INTO lord_bio_guestbook(lord_address,bitmap_number,author_kind,visitor_hash,"
+            "ip_hash,visitor_label,text,text_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            ("bc1p-test-lord", 1688, "visitor", "v", "i", "203.0.113.*",
+             "hello lemondrop world", "t", int(time.time())),
+        )
+        con.commit()
+        con.close()
+        with patch.dict(moderation_policy.POLICY, {"terms": ["lemondrop"]}):
+            code, body, _headers = lord_bio.guestbook_get(self.db, self.root, 1688)
+            self.assertEqual(code, 200)
+            self.assertNotIn("lemondrop", body["messages"][0]["text"])
+            self.assertNotIn("lemondrop", lord_bio.guestbook_preview(self.db, 1688)[1]["messages"][0]["text"])
+            self.assertNotIn("lemondrop", lord_bio.guestbook_latest(self.db)[1]["messages"][0]["text"])
+        # Without the term in the policy the note is returned unchanged.
+        self.assertIn("lemondrop", lord_bio.guestbook_get(self.db, self.root, 1688)[1]["messages"][0]["text"])
 
     def test_cached_holdings_are_numeric_and_guestbook_never_exposes_raw_ip(self):
         status, payload = lord_bio.get_bio(self.db, 1688, sort="bitmap")
